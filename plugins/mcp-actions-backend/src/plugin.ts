@@ -28,6 +28,7 @@ import {
   tracingServiceRef,
 } from '@backstage/backend-plugin-api/alpha';
 import { parseServerConfigs } from './config';
+import { loadServerSkills } from './services/loadServerSkills';
 
 /**
  * mcpPlugin backend plugin
@@ -82,6 +83,11 @@ export const mcpPlugin = createBackendPlugin({
           captureToolPayloads,
         });
 
+        const loadSkillsOf = (serverName: string, directory?: string) =>
+          directory
+            ? loadServerSkills({ directory, serverName, logger })
+            : undefined;
+
         const router = Router();
         router.use(json());
 
@@ -95,6 +101,7 @@ export const mcpPlugin = createBackendPlugin({
               tracing,
               auditor,
               serverConfig,
+              skills: await loadSkillsOf(key, serverConfig.skillsDirectory),
             });
 
             router.use(`/v1/${key}`, streamableRouter);
@@ -108,6 +115,9 @@ export const mcpPlugin = createBackendPlugin({
           name: config.getOptionalString('mcpActions.name') ?? 'backstage',
           description: config.getOptionalString('mcpActions.description'),
           instructions: config.getOptionalString('mcpActions.instructions'),
+          skillsDirectory: config.getOptionalString(
+            'mcpActions.skills.directory',
+          ),
           includeRules: [],
           excludeRules: [],
         };
@@ -122,6 +132,10 @@ export const mcpPlugin = createBackendPlugin({
             tracing,
             auditor,
             serverConfig: defaultServerConfig,
+            skills: await loadSkillsOf(
+              'default',
+              defaultServerConfig.skillsDirectory,
+            ),
           }),
         );
 

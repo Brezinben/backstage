@@ -35,6 +35,18 @@ export interface Config {
     instructions?: string;
 
     /**
+     * Agent Skills served with the MCP skills extension on the default /v1
+     * server. Named servers do not inherit this value.
+     */
+    skills?: {
+      /**
+       * Directory that holds one folder per skill, each with a SKILL.md file.
+       * The skills are listed at startup.
+       */
+      directory: string;
+    };
+
+    /**
      * When true, MCP tool names include the plugin ID prefix to avoid
      * collisions across plugins. For example an action registered as
      * "get-entity" by the catalog plugin becomes "catalog.get-entity".
@@ -70,6 +82,14 @@ export interface Config {
         description?: string;
         /** Instructions describing how clients should use the MCP server. */
         instructions?: string;
+        /** Agent Skills served with the MCP skills extension. */
+        skills?: {
+          /**
+           * Directory that holds one folder per skill, each with a SKILL.md
+           * file. The skills are listed at startup.
+           */
+          directory: string;
+        };
         /** Filter rules to include or exclude specific actions. */
         filter?: {
           include?: Array<{

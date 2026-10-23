@@ -25,6 +25,7 @@ For full documentation on configuring and using this plugin, see the [MCP Action
 
 - Configuring which actions to expose
 - Server name, description, and instructions
+- Agent Skills
 - Namespaced tool names
 - Multiple MCP servers with filter rules
 - Authentication (CIMD, static tokens)

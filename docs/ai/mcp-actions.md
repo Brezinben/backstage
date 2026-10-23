@@ -70,6 +70,65 @@ mcpActions:
 
 For named servers, configure instructions separately for each server.
 
+## Agent Skills
+
+Instructions suit a few paragraphs of guidance. For longer guidance, such as how your catalog is modeled or which filters find the components of a system, use [Agent Skills](https://agentskills.io/specification). An Agent Skill is a folder of Markdown instructions that an AI agent reads only when a task needs it.
+
+The MCP server serves skills with the [MCP skills extension](https://modelcontextprotocol.io/extensions/skills/overview). Clients that support the extension list the skills with `skills/list` and load a skill on demand. Other clients see the `SKILL.md` of each skill in the MCP resource list, and can read the other files of a skill by URI. Each file has a `skill://` URI, for example `skill://find-entities/SKILL.md`.
+
+Put one folder per skill in a directory. Each folder holds a `SKILL.md` file and the files that it refers to:
+
+```text
+mcp-skills/
+└── find-entities/
+    ├── SKILL.md
+    └── references/
+        └── FILTERS.md
+```
+
+`SKILL.md` starts with YAML frontmatter. The `name` must match the folder name and use only lowercase letters, digits and hyphens. Clients use the `description` to decide when to load the skill:
+
+```markdown title="mcp-skills/find-entities/SKILL.md"
+---
+name: find-entities
+description: Find catalog entities of this Backstage instance with the catalog tools.
+---
+
+# Find entities
+
+Use `catalog.query-catalog-entities` and filter on `kind` first.
+The filters for each kind are in `references/FILTERS.md`.
+```
+
+Then point the default server to the directory:
+
+```yaml title="app-config.yaml"
+mcpActions:
+  skills:
+    directory: ./mcp-skills
+```
+
+A relative path resolves from the working directory of the backend process. With `yarn start`, this is `packages/backend`. In a container image, it is the `WORKDIR`, so copy the directory into the image. For example, with the default backend Dockerfile (`WORKDIR /app`), add `COPY packages/backend/mcp-skills ./mcp-skills`.
+
+Named servers do not inherit `mcpActions.skills`. Set `skills.directory` on each named server that serves skills:
+
+```yaml title="app-config.yaml"
+mcpActions:
+  servers:
+    catalog:
+      name: 'Backstage Catalog'
+      skills:
+        directory: ./mcp-skills
+```
+
+The server lists the skills and computes a digest of each file at startup. To change a skill, deploy the change and restart the backend. If a file changes on disk without a restart, reads of that file fail until the next restart.
+
+A skill that does not follow the specification, for example a `name` that does not match its folder, is skipped with a warning in the backend logs. A skill that contains a symbolic link is skipped. For example, the files of a Kubernetes ConfigMap mounted as a volume are symbolic links. If the directory, a subfolder or a file cannot be read, the plugin fails at startup.
+
+:::note
+Skills are not filtered by the permission framework. Every user who can connect to the MCP server can read every skill of that server. Do not put secrets in skills. Each read of a skill file emits a `skill-read` audit event. Each request that lists skills or their files (`skills/list`, `skills/get`, `resources/list` and `resources/directory/read`) emits a `skill-discovery` audit event.
+:::
+
 ## Namespaced Tool Names
 
 By default, MCP tool names include the plugin ID prefix to avoid collisions across plugins. For example, an action registered as `greet-user` by `my-custom-plugin` is exposed as `my-custom-plugin.greet-user`.
