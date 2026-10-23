@@ -32,6 +32,7 @@ import {
 import { MetricsService } from '@backstage/backend-plugin-api/alpha';
 import { bucketBoundaries, McpServerSessionAttributes } from '../metrics';
 import { McpServerConfig } from '../config';
+import type { ServerDoc } from '../services/loadServerDocs';
 
 // The SDK exports no constant for the 2026-07-28 revision. The list bounds
 // the values that a client can put on the metric attribute.
@@ -48,6 +49,7 @@ export const createStreamableRouter = ({
   tracing,
   auditor,
   serverConfig,
+  docs,
 }: {
   mcpService: McpService;
   logger: LoggerService;
@@ -56,6 +58,7 @@ export const createStreamableRouter = ({
   tracing: TracingService;
   auditor: AuditorService;
   serverConfig?: McpServerConfig;
+  docs?: ServerDoc[];
 }): Router => {
   const router = PromiseRouter();
 
@@ -95,7 +98,7 @@ export const createStreamableRouter = ({
       // credentials of this request. Stateless serving lets several backend
       // instances run without sticky sessions.
       const handler = createMcpHandler(
-        () => mcpService.getServer({ credentials, serverConfig, req }),
+        () => mcpService.getServer({ credentials, serverConfig, docs, req }),
         { onerror: err => logger.error(err.message) },
       );
 

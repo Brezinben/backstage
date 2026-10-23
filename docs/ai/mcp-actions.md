@@ -70,6 +70,48 @@ mcpActions:
 
 For named servers, configure instructions separately for each server.
 
+## Documentation Resources
+
+The MCP server can serve a directory of Markdown files as [MCP resources](https://modelcontextprotocol.io/specification/2026-07-28/server/resources). Use them for reference documentation, such as how your catalog is modeled. The MCP client lists the resources. The client application decides how a resource gets into a conversation: often a user attaches it, for example with an `@` mention.
+
+Put the Markdown files in a directory. Subfolders are allowed:
+
+```text
+mcp-docs/
+├── getting-started.md
+└── catalog/
+    └── filters.md
+```
+
+Then point the default server to the directory:
+
+```yaml title="app-config.yaml"
+mcpActions:
+  docs:
+    directory: ./mcp-docs
+```
+
+Each file becomes a resource with a `docs://` URI built from its path in the directory, for example `docs://catalog/filters.md`. The URI percent-encodes each path segment, so `how to.md` becomes `docs://how%20to.md`. The resource name is the path as is, and the MIME type is `text/markdown`.
+
+A relative path resolves from the working directory of the backend process. With `yarn start`, this is `packages/backend`. In a container image, it is the `WORKDIR`, so copy the directory into the image. For example, with the default backend Dockerfile (`WORKDIR /app`), add `COPY packages/backend/mcp-docs ./mcp-docs`.
+
+Named servers do not inherit `mcpActions.docs`. Set `docs.directory` on each named server that serves documentation:
+
+```yaml title="app-config.yaml"
+mcpActions:
+  servers:
+    catalog:
+      name: 'Backstage Catalog'
+      docs:
+        directory: ./mcp-docs
+```
+
+The server lists the files at startup and reads a file each time a client asks for it. The server serves an edit to a listed file on the next read. A new or renamed file needs a restart of the backend. Only files that end with `.md` are served. Hidden files and folders, whose names start with `.`, are skipped. Symbolic links found at startup are skipped with a warning in the backend logs. If the directory or a subfolder cannot be read, the plugin fails at startup. Only users who can write to the directory can change what the server serves, so keep the directory read-only for everyone else.
+
+:::note
+Documentation resources are not filtered by the permission framework. Every user who can connect to the MCP server can read every file of that server. Do not put secrets in these files. Each read emits a `doc-read` audit event with the URI of the file.
+:::
+
 ## Namespaced Tool Names
 
 By default, MCP tool names include the plugin ID prefix to avoid collisions across plugins. For example, an action registered as `greet-user` by `my-custom-plugin` is exposed as `my-custom-plugin.greet-user`.
