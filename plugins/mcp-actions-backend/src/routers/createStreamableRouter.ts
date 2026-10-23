@@ -22,6 +22,7 @@ import {
   SUPPORTED_PROTOCOL_VERSIONS,
 } from '@modelcontextprotocol/server';
 import { toNodeHandler } from '@modelcontextprotocol/node';
+import type { SkillsExtension } from '@modelcontextprotocol/server/ext/skills';
 import { toError } from '@backstage/errors';
 import { TracingService } from '@backstage/backend-plugin-api/alpha';
 import {
@@ -48,6 +49,7 @@ export const createStreamableRouter = ({
   tracing,
   auditor,
   serverConfig,
+  skills,
 }: {
   mcpService: McpService;
   logger: LoggerService;
@@ -56,6 +58,7 @@ export const createStreamableRouter = ({
   tracing: TracingService;
   auditor: AuditorService;
   serverConfig?: McpServerConfig;
+  skills?: SkillsExtension;
 }): Router => {
   const router = PromiseRouter();
 
@@ -95,7 +98,7 @@ export const createStreamableRouter = ({
       // credentials of this request. Stateless serving lets several backend
       // instances run without sticky sessions.
       const handler = createMcpHandler(
-        () => mcpService.getServer({ credentials, serverConfig, req }),
+        () => mcpService.getServer({ credentials, serverConfig, skills, req }),
         { onerror: err => logger.error(err.message) },
       );
 

@@ -25,8 +25,11 @@ import {
   Client,
   StreamableHTTPClientTransport,
 } from '@modelcontextprotocol/client';
+import { SkillsClient } from '@modelcontextprotocol/client/ext/skills';
+import { resolve } from 'node:path';
 import request from 'supertest';
 import waitForExpect from 'wait-for-expect';
+import type { JsonObject } from '@backstage/types';
 
 describe('Mcp Backend', () => {
   const mockPluginWithActions = createBackendPlugin({
@@ -671,6 +674,88 @@ describe('Mcp Backend', () => {
       await request(server)
         .get('/.well-known/oauth-protected-resource/api/mcp-actions/v1')
         .expect(200);
+    });
+  });
+
+  describe('skills', () => {
+    const skillsDirectory = resolve(__dirname, '__fixtures__/skills');
+
+    const startBackend = async (mcpActions: JsonObject) => {
+      const { server } = await startTestBackend({
+        features: [
+          mcpPlugin,
+          mockPluginWithActions,
+          metricsServiceMock.mock().factory,
+          tracingServiceMock.mock().factory,
+          mockServices.rootConfig.factory({
+            data: {
+              backend: { actions: { pluginSources: ['local'] } },
+              mcpActions,
+            },
+          }),
+        ],
+      });
+      const address = server.address();
+      if (typeof address !== 'object' || !('port' in address!)) {
+        throw new Error('server broke');
+      }
+      return `http://localhost:${address.port}/api/mcp-actions`;
+    };
+
+    const listSkills = async (url: string, pinModern = false) => {
+      const client = new Client(
+        { name: 'test client', version: '1.0' },
+        pinModern
+          ? { versionNegotiation: { mode: { pin: '2026-07-28' } } }
+          : undefined,
+      );
+      await client.connect(new StreamableHTTPClientTransport(new URL(url)));
+      const { skills } = await new SkillsClient(client).list();
+      return skills.map(skill => skill.uri);
+    };
+
+    it.each([
+      ['2025-11-25', false],
+      ['2026-07-28', true],
+    ])(
+      'should serve the configured skills to a %s client',
+      async (_version, pinModern) => {
+        const baseUrl = await startBackend({
+          skills: { directory: skillsDirectory },
+        });
+
+        await expect(listSkills(`${baseUrl}/v1`, pinModern)).resolves.toEqual([
+          'skill://find-entities/SKILL.md',
+        ]);
+      },
+    );
+
+    it('should not serve the root skills on a named server', async () => {
+      const baseUrl = await startBackend({
+        skills: { directory: skillsDirectory },
+        servers: { catalog: { name: 'Catalog Server' } },
+      });
+
+      await expect(listSkills(`${baseUrl}/v1/catalog`)).resolves.toEqual([]);
+      await expect(listSkills(`${baseUrl}/v1`)).resolves.toEqual([
+        'skill://find-entities/SKILL.md',
+      ]);
+    });
+
+    it('should serve skills only on the server that configures them', async () => {
+      const baseUrl = await startBackend({
+        servers: {
+          catalog: {
+            name: 'Catalog Server',
+            skills: { directory: skillsDirectory },
+          },
+        },
+      });
+
+      await expect(listSkills(`${baseUrl}/v1/catalog`)).resolves.toEqual([
+        'skill://find-entities/SKILL.md',
+      ]);
+      await expect(listSkills(`${baseUrl}/v1`)).resolves.toEqual([]);
     });
   });
 });

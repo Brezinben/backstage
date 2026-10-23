@@ -22,6 +22,9 @@ import {
   tracingServiceMock,
 } from '@backstage/backend-test-utils/alpha';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
+import { SkillsClient } from '@modelcontextprotocol/client/ext/skills';
+import { resolve } from 'node:path';
+import { loadServerSkills } from './loadServerSkills';
 import { InputError, NotFoundError } from '@backstage/errors';
 import { McpServerConfig, parseFilterRules } from '../config';
 import { ActionsService } from '@backstage/backend-plugin-api/alpha';
@@ -1288,6 +1291,186 @@ describe('McpService', () => {
         ([key]) => key === 'gen_ai.tool.call.result',
       );
       expect(resultCall).toBeUndefined();
+    });
+  });
+
+  describe('skills', () => {
+    const connect = async (
+      withSkills: boolean,
+      auditor = mockServices.auditor.mock(),
+    ) => {
+      const mockActionsRegistry = actionsRegistryServiceMock();
+      mockActionsRegistry.register({
+        name: 'mock-action',
+        title: 'Test',
+        description: 'Test',
+        schema: {
+          input: z => z.object({ input: z.string() }),
+          output: z => z.object({ output: z.string() }),
+        },
+        action: async () => ({ output: { output: 'test' } }),
+      });
+      const mcpService = await McpService.create({
+        actions: mockActionsRegistry,
+        metrics: metricsServiceMock.mock(),
+        tracingService: tracingServiceMock.mock(),
+        auditor,
+      });
+      const skills = withSkills
+        ? await loadServerSkills({
+            directory: resolve(__dirname, '../__fixtures__/skills'),
+            serverName: 'test',
+            logger: mockServices.logger.mock(),
+          })
+        : undefined;
+
+      const server = mcpService.getServer({
+        credentials: mockCredentials.user(),
+        skills,
+      });
+      const client = new Client({ name: 'test', version: '1.0' });
+      const [clientTransport, serverTransport] =
+        InMemoryTransport.createLinkedPair();
+      await Promise.all([
+        client.connect(clientTransport),
+        server.connect(serverTransport),
+      ]);
+      return client;
+    };
+
+    it('should not declare resources or the skills extension without skills', async () => {
+      const client = await connect(false);
+
+      expect(client.getServerCapabilities()).toEqual({ tools: {} });
+      expect(new SkillsClient(client).supported).toBe(false);
+    });
+
+    it('should declare resources and the skills extension', async () => {
+      const client = await connect(true);
+
+      expect(client.getServerCapabilities()).toEqual(
+        expect.objectContaining({
+          tools: {},
+          resources: expect.objectContaining({ listChanged: false }),
+          extensions: expect.objectContaining({
+            'io.modelcontextprotocol/skills': expect.any(Object),
+          }),
+        }),
+      );
+    });
+
+    it('should list, get and read the skills', async () => {
+      const skills = new SkillsClient(await connect(true));
+
+      const listing = await skills.list();
+      expect(listing.skills.map(skill => skill.uri)).toEqual([
+        'skill://find-entities/SKILL.md',
+      ]);
+
+      const { skill } = await skills.get('skill://find-entities/SKILL.md');
+      const manifest = await skills.read(skill);
+      expect(manifest.verified).toBe(true);
+      expect(manifest.frontmatter).toEqual(
+        expect.objectContaining({ name: 'find-entities' }),
+      );
+
+      const reference = await skills.read(skill, 'references/FILTERS.md');
+      expect(reference.text).toContain('spec.type');
+    });
+
+    const auditedEvents = async (
+      auditor: ReturnType<typeof mockServices.auditor.mock>,
+      eventId: string,
+    ) => {
+      const calls = auditor.createEvent.mock.calls
+        .map(([options], index) => ({
+          options,
+          event: auditor.createEvent.mock.results[index]?.value,
+        }))
+        .filter(({ options }) => options.eventId === eventId);
+      return Promise.all(
+        calls.map(async ({ options, event }) => ({
+          meta: options.meta,
+          event: await event,
+        })),
+      );
+    };
+
+    it('should audit each skill read with its outcome', async () => {
+      const auditor = mockServices.auditor.mock();
+      const client = await connect(true, auditor);
+
+      await client.readResource({ uri: 'skill://find-entities/SKILL.md' });
+      await expect(
+        client.readResource({ uri: 'skill://unknown/SKILL.md' }),
+      ).rejects.toThrow();
+
+      const [found, unknown] = await auditedEvents(auditor, 'skill-read');
+      expect([found.meta, unknown.meta]).toEqual([
+        { method: 'resources/read', uri: 'skill://find-entities/SKILL.md' },
+        { method: 'resources/read', uri: 'skill://unknown/SKILL.md' },
+      ]);
+      expect(found.event.success).toHaveBeenCalled();
+      expect(unknown.event.fail).toHaveBeenCalled();
+    });
+
+    it('should audit every way to discover the skills, with its outcome', async () => {
+      const auditor = mockServices.auditor.mock();
+      const client = await connect(true, auditor);
+      const skills = new SkillsClient(client);
+
+      await skills.list();
+      await skills.get('skill://find-entities/SKILL.md');
+      await expect(skills.get('skill://unknown/SKILL.md')).rejects.toThrow();
+      await client.listResources();
+      await skills.readDirectory('skill://find-entities');
+
+      const discoveries = await auditedEvents(auditor, 'skill-discovery');
+      expect(discoveries.map(({ meta }) => meta)).toEqual([
+        { method: 'skills/list' },
+        { method: 'skills/get', uri: 'skill://find-entities/SKILL.md' },
+        { method: 'skills/get', uri: 'skill://unknown/SKILL.md' },
+        { method: 'resources/list' },
+        { method: 'resources/directory/read', uri: 'skill://find-entities' },
+      ]);
+      expect(
+        discoveries.map(({ event }) => event.fail.mock.calls.length),
+      ).toEqual([0, 0, 1, 0, 0]);
+    });
+
+    it('should cap the URI that a client puts in the audit event', async () => {
+      const auditor = mockServices.auditor.mock();
+      const client = await connect(true, auditor);
+      const uri = `skill://${'a'.repeat(1000)}/SKILL.md`;
+
+      await expect(client.readResource({ uri })).rejects.toThrow();
+
+      const [read] = await auditedEvents(auditor, 'skill-read');
+      expect(read.meta).toEqual({
+        method: 'resources/read',
+        uri: uri.slice(0, 256),
+      });
+    });
+
+    it('should not read a file outside the skills directory', async () => {
+      const client = await connect(true);
+
+      await expect(
+        client.readResource({ uri: 'skill://../loadServerSkills.test.ts' }),
+      ).rejects.toThrow();
+      await expect(
+        client.readResource({ uri: 'skill://find-entities/../../README.md' }),
+      ).rejects.toThrow();
+    });
+
+    it('should list the same tools with or without skills', async () => {
+      const clientWithoutSkills = await connect(false);
+      const clientWithSkills = await connect(true);
+
+      const withoutSkills = await clientWithoutSkills.listTools();
+      const withSkills = await clientWithSkills.listTools();
+
+      expect(withSkills.tools).toEqual(withoutSkills.tools);
     });
   });
 });

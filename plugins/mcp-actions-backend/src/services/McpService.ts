@@ -20,11 +20,12 @@ import {
 } from '@backstage/backend-plugin-api';
 import type { Request } from 'express';
 import {
-  Server as McpServer,
+  McpServer,
   specTypeSchemas,
   StandardSchemaV1,
   Tool,
 } from '@modelcontextprotocol/server';
+import type { SkillsExtension } from '@modelcontextprotocol/server/ext/skills';
 import { JsonObject } from '@backstage/types';
 import {
   ActionsService,
@@ -78,6 +79,8 @@ const PROPAGATED_BAGGAGE_ATTRIBUTES: ReadonlySet<string> = new Set([
 // allowlisting keys protects against arbitrary attribute names but not
 // against pathologically large values inflating exported span sizes.
 const BAGGAGE_ATTRIBUTE_VALUE_MAX_LENGTH = 256;
+
+const AUDITED_URI_MAX_LENGTH = 256;
 
 function baggageAttributes(
   tracingService: TracingService,
@@ -160,13 +163,15 @@ export class McpService {
   getServer({
     credentials,
     serverConfig,
+    skills,
     req,
   }: {
     credentials: BackstageCredentials;
     serverConfig?: McpServerConfig;
+    skills?: SkillsExtension;
     req?: Request;
   }) {
-    const server = new McpServer(
+    const mcp = new McpServer(
       {
         name: serverConfig?.name ?? 'backstage',
         version,
@@ -175,12 +180,21 @@ export class McpService {
         }),
       },
       {
-        capabilities: { tools: {} },
         ...(serverConfig?.instructions && {
           instructions: serverConfig.instructions,
         }),
+        ...(skills && {
+          // Skills load once at startup, so the resource list never changes.
+          capabilities: { resources: { listChanged: false } },
+          extensions: [skills],
+        }),
       },
     );
+    const { server } = mcp;
+
+    // Declared here and not in the McpServer options: there, McpServer would
+    // install its own tool handlers and advertise `tools.listChanged`.
+    server.registerCapabilities({ tools: {} });
 
     server.setRequestHandler('tools/list', async () => {
       const startTime = performance.now();
@@ -376,7 +390,46 @@ export class McpService {
       }
     });
 
-    return server;
+    if (skills) {
+      this.auditSkillRequests(server, req);
+    }
+
+    return mcp;
+  }
+
+  private auditSkillRequests(server: McpServer['server'], req?: Request) {
+    // The skills resources are the only resources of this server, so every
+    // resources method reveals or returns skills.
+    const auditedSkillMethods = [
+      { method: 'skills/list', eventId: 'skill-discovery' },
+      { method: 'skills/get', eventId: 'skill-discovery' },
+      { method: 'resources/list', eventId: 'skill-discovery' },
+      { method: 'resources/directory/read', eventId: 'skill-discovery' },
+      { method: 'resources/read', eventId: 'skill-read' },
+    ];
+    for (const { method, eventId } of auditedSkillMethods) {
+      server.use(method, async (request, ctx, next) => {
+        // The middleware runs before the SDK validates the request, so the
+        // value is still caller-controlled.
+        const uri =
+          typeof request.params?.uri === 'string'
+            ? request.params.uri.slice(0, AUDITED_URI_MAX_LENGTH)
+            : undefined;
+        const auditorEvent = await this.auditor.createEvent({
+          eventId,
+          ...(req && { request: req }),
+          meta: { method, ...(uri !== undefined && { uri }) },
+        });
+        try {
+          const result = await next(request, ctx);
+          await auditorEvent.success();
+          return result;
+        } catch (err) {
+          await auditorEvent.fail({ error: toError(err) });
+          throw err;
+        }
+      });
+    }
   }
 
   private filterActions(
