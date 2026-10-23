@@ -111,7 +111,11 @@
     "@yarnpkg/plugin-npm@npm:^3.1.0": "patch:@yarnpkg/plugin-npm@npm%3A3.7.1#~/.yarn/patches/@yarnpkg-plugin-npm-npm-3.7.1-ab2f1a850e.patch",
     "GendocuPublicApis": "npm:gendocu-public-apis@^1.0.0",
     "ast-types@npm:^0.13.4": "0.16.3",
-    "csstype@npm:^3.0.2": "3.0.9"
+    "csstype@npm:^3.0.2": "3.0.9",
+    "@modelcontextprotocol/core": "file:/tmp/claude-1000/-home-benjamin-projects-kermind-workspace-kermind-git-main/4bd18e0d-6596-4141-8d62-6247645e19c4/scratchpad/sdk-tgz/modelcontextprotocol-core-2.3.1.tgz",
+    "@modelcontextprotocol/server": "file:/tmp/claude-1000/-home-benjamin-projects-kermind-workspace-kermind-git-main/4bd18e0d-6596-4141-8d62-6247645e19c4/scratchpad/sdk-tgz/modelcontextprotocol-server-2.3.1.tgz",
+    "@modelcontextprotocol/client": "file:/tmp/claude-1000/-home-benjamin-projects-kermind-workspace-kermind-git-main/4bd18e0d-6596-4141-8d62-6247645e19c4/scratchpad/sdk-tgz/modelcontextprotocol-client-2.3.1.tgz",
+    "@modelcontextprotocol/node": "file:/tmp/claude-1000/-home-benjamin-projects-kermind-workspace-kermind-git-main/4bd18e0d-6596-4141-8d62-6247645e19c4/scratchpad/sdk-tgz/modelcontextprotocol-node-2.1.1.tgz"
   },
   "dependencies": {
     "@backstage/errors": "workspace:^",
