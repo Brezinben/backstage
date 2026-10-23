@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
-import { mockCredentials, mockServices } from '@backstage/backend-test-utils';
+import {
+  createMockDirectory,
+  mockCredentials,
+  mockServices,
+} from '@backstage/backend-test-utils';
 import { McpService } from './McpService';
 import {
   actionsRegistryServiceMock,
@@ -22,6 +26,8 @@ import {
   tracingServiceMock,
 } from '@backstage/backend-test-utils/alpha';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
+import { resolve } from 'node:path';
+import { loadServerDocs, type ServerDoc } from './loadServerDocs';
 import { InputError, NotFoundError } from '@backstage/errors';
 import { McpServerConfig, parseFilterRules } from '../config';
 import { ActionsService } from '@backstage/backend-plugin-api/alpha';
@@ -1288,6 +1294,152 @@ describe('McpService', () => {
         ([key]) => key === 'gen_ai.tool.call.result',
       );
       expect(resultCall).toBeUndefined();
+    });
+  });
+
+  describe('docs', () => {
+    const loadFixtureDocs = () =>
+      loadServerDocs({
+        directory: resolve(__dirname, '../__fixtures__/docs'),
+        serverName: 'test',
+        logger: mockServices.logger.mock(),
+      });
+
+    const connect = async (
+      docs?: ServerDoc[],
+      auditor = mockServices.auditor.mock(),
+    ) => {
+      const mockActionsRegistry = actionsRegistryServiceMock();
+      mockActionsRegistry.register({
+        name: 'mock-action',
+        title: 'Test',
+        description: 'Test',
+        schema: {
+          input: z => z.object({ input: z.string() }),
+          output: z => z.object({ output: z.string() }),
+        },
+        action: async () => ({ output: { output: 'test' } }),
+      });
+      const mcpService = await McpService.create({
+        actions: mockActionsRegistry,
+        metrics: metricsServiceMock.mock(),
+        tracingService: tracingServiceMock.mock(),
+        auditor,
+      });
+
+      const server = mcpService.getServer({
+        credentials: mockCredentials.user(),
+        docs,
+      });
+      const client = new Client({ name: 'test', version: '1.0' });
+      const [clientTransport, serverTransport] =
+        InMemoryTransport.createLinkedPair();
+      await Promise.all([
+        client.connect(clientTransport),
+        server.connect(serverTransport),
+      ]);
+      return client;
+    };
+
+    it('should not declare resources without docs', async () => {
+      const client = await connect();
+
+      expect(client.getServerCapabilities()).toEqual({ tools: {} });
+    });
+
+    it('should not declare resources when the docs directory has no Markdown file', async () => {
+      const client = await connect([]);
+
+      expect(client.getServerCapabilities()).toEqual({ tools: {} });
+    });
+
+    it('should list the docs as Markdown resources', async () => {
+      const client = await connect(await loadFixtureDocs());
+
+      expect(client.getServerCapabilities()).toEqual({
+        tools: {},
+        resources: { listChanged: false },
+      });
+      const { resources } = await client.listResources();
+      expect(resources).toEqual([
+        expect.objectContaining({
+          uri: 'docs://catalog/filters.md',
+          name: 'catalog/filters.md',
+          mimeType: 'text/markdown',
+        }),
+        expect.objectContaining({
+          uri: 'docs://getting-started.md',
+          name: 'getting-started.md',
+          mimeType: 'text/markdown',
+        }),
+      ]);
+    });
+
+    it('should read a doc', async () => {
+      const client = await connect(await loadFixtureDocs());
+
+      const { contents } = await client.readResource({
+        uri: 'docs://catalog/filters.md',
+      });
+
+      expect(contents).toEqual([
+        {
+          uri: 'docs://catalog/filters.md',
+          mimeType: 'text/markdown',
+          text: '# Filters\n\nFilter on `kind`, then on `spec.type`.\n',
+        },
+      ]);
+    });
+
+    it('should only read the listed docs', async () => {
+      const client = await connect(await loadFixtureDocs());
+
+      await expect(
+        client.readResource({ uri: 'docs://missing.md' }),
+      ).rejects.toThrow();
+      await expect(
+        client.readResource({ uri: 'docs://catalog/../../README.md' }),
+      ).rejects.toThrow();
+    });
+
+    it('should audit each doc read with its outcome, without exposing the file path', async () => {
+      const mockDir = createMockDirectory();
+      mockDir.setContent({ 'kept.md': '# Kept', 'deleted.md': '# Deleted' });
+      const docs = await loadServerDocs({
+        directory: mockDir.path,
+        serverName: 'test',
+        logger: mockServices.logger.mock(),
+      });
+      const auditor = mockServices.auditor.mock();
+      const client = await connect(docs, auditor);
+      mockDir.remove();
+      mockDir.setContent({ 'kept.md': '# Kept' });
+
+      await client.readResource({ uri: 'docs://kept.md' });
+      const failure = client.readResource({ uri: 'docs://deleted.md' });
+      await expect(failure).rejects.toMatchObject({
+        code: -32602,
+        message: expect.stringContaining(
+          'Resource not found: docs://deleted.md',
+        ),
+      });
+      await expect(failure).rejects.not.toThrow(mockDir.path);
+
+      const docReads = auditor.createEvent.mock.calls
+        .map(([options], index) => ({
+          options,
+          event: auditor.createEvent.mock.results[index]?.value,
+        }))
+        .filter(({ options }) => options.eventId === 'doc-read');
+      expect(docReads.map(({ options }) => options.meta)).toEqual([
+        { uri: 'docs://kept.md' },
+        { uri: 'docs://deleted.md' },
+      ]);
+      const [kept, deleted] = await Promise.all(
+        docReads.map(({ event }) => event),
+      );
+      expect(kept.success).toHaveBeenCalled();
+      expect(deleted.fail).toHaveBeenCalled();
     });
   });
 });

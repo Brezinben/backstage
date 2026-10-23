@@ -35,6 +35,19 @@ export interface Config {
     instructions?: string;
 
     /**
+     * Markdown files served as `docs://` resources on the default /v1
+     * server. Named servers do not inherit this value.
+     */
+    docs?: {
+      /**
+       * Directory that holds the Markdown files. A relative path resolves
+       * from the working directory of the backend process. The files are
+       * listed at startup.
+       */
+      directory: string;
+    };
+
+    /**
      * When true, MCP tool names include the plugin ID prefix to avoid
      * collisions across plugins. For example an action registered as
      * "get-entity" by the catalog plugin becomes "catalog.get-entity".
@@ -70,6 +83,15 @@ export interface Config {
         description?: string;
         /** Instructions describing how clients should use the MCP server. */
         instructions?: string;
+        /** Markdown files served as `docs://` resources. */
+        docs?: {
+          /**
+           * Directory that holds the Markdown files. A relative path resolves
+           * from the working directory of the backend process. The files are
+           * listed at startup.
+           */
+          directory: string;
+        };
         /** Filter rules to include or exclude specific actions. */
         filter?: {
           include?: Array<{

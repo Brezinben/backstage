@@ -28,6 +28,7 @@ import {
   tracingServiceRef,
 } from '@backstage/backend-plugin-api/alpha';
 import { parseServerConfigs } from './config';
+import { loadServerDocs } from './services/loadServerDocs';
 
 /**
  * mcpPlugin backend plugin
@@ -82,6 +83,11 @@ export const mcpPlugin = createBackendPlugin({
           captureToolPayloads,
         });
 
+        const loadDocsOf = (serverName: string, directory?: string) =>
+          directory
+            ? loadServerDocs({ directory, serverName, logger })
+            : undefined;
+
         const router = Router();
         router.use(json());
 
@@ -95,6 +101,7 @@ export const mcpPlugin = createBackendPlugin({
               tracing,
               auditor,
               serverConfig,
+              docs: await loadDocsOf(key, serverConfig.docsDirectory),
             });
 
             router.use(`/v1/${key}`, streamableRouter);
@@ -108,6 +115,7 @@ export const mcpPlugin = createBackendPlugin({
           name: config.getOptionalString('mcpActions.name') ?? 'backstage',
           description: config.getOptionalString('mcpActions.description'),
           instructions: config.getOptionalString('mcpActions.instructions'),
+          docsDirectory: config.getOptionalString('mcpActions.docs.directory'),
           includeRules: [],
           excludeRules: [],
         };
@@ -122,6 +130,10 @@ export const mcpPlugin = createBackendPlugin({
             tracing,
             auditor,
             serverConfig: defaultServerConfig,
+            docs: await loadDocsOf(
+              'default',
+              defaultServerConfig.docsDirectory,
+            ),
           }),
         );
 

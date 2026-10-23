@@ -28,6 +28,7 @@ export type McpServerConfig = {
   name: string;
   description?: string;
   instructions?: string;
+  docsDirectory?: string;
   includeRules: FilterRule[];
   excludeRules: FilterRule[];
 };
@@ -90,6 +91,7 @@ export function parseServerConfigs(
       name: serverConfig.getString('name'),
       description: serverConfig.getOptionalString('description'),
       instructions: serverConfig.getOptionalString('instructions'),
+      docsDirectory: serverConfig.getOptionalString('docs.directory'),
       includeRules,
       excludeRules,
     });

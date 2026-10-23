@@ -20,7 +20,8 @@ import {
 } from '@backstage/backend-plugin-api';
 import type { Request } from 'express';
 import {
-  Server as McpServer,
+  McpServer,
+  ResourceNotFoundError,
   specTypeSchemas,
   StandardSchemaV1,
   Tool,
@@ -40,6 +41,8 @@ import { performance } from 'node:perf_hooks';
 import { handleErrors } from './handleErrors';
 import { bucketBoundaries, McpServerOperationAttributes } from '../metrics';
 import { FilterRule, McpServerConfig } from '../config';
+import type { ServerDoc } from './loadServerDocs';
+import { readFile } from 'node:fs/promises';
 
 function describeIssues(issues: readonly StandardSchemaV1.Issue[]): string {
   return issues
@@ -160,13 +163,15 @@ export class McpService {
   getServer({
     credentials,
     serverConfig,
+    docs,
     req,
   }: {
     credentials: BackstageCredentials;
     serverConfig?: McpServerConfig;
+    docs?: ServerDoc[];
     req?: Request;
   }) {
-    const server = new McpServer(
+    const mcp = new McpServer(
       {
         name: serverConfig?.name ?? 'backstage',
         version,
@@ -175,12 +180,16 @@ export class McpService {
         }),
       },
       {
-        capabilities: { tools: {} },
         ...(serverConfig?.instructions && {
           instructions: serverConfig.instructions,
         }),
       },
     );
+    const { server } = mcp;
+
+    // Declared here and not in the McpServer options: there, McpServer would
+    // install its own tool handlers, which conflict with the ones below.
+    server.registerCapabilities({ tools: {} });
 
     server.setRequestHandler('tools/list', async () => {
       const startTime = performance.now();
@@ -376,7 +385,43 @@ export class McpService {
       }
     });
 
-    return server;
+    if (docs?.length) {
+      // Must run before registerResource(), which defaults listChanged to
+      // true. The list of docs is built once at startup and never changes.
+      server.registerCapabilities({ resources: { listChanged: false } });
+      for (const doc of docs) {
+        this.registerDoc(mcp, doc, req);
+      }
+    }
+
+    return mcp;
+  }
+
+  private registerDoc(mcp: McpServer, doc: ServerDoc, req?: Request) {
+    mcp.registerResource(
+      doc.name,
+      doc.uri,
+      { mimeType: 'text/markdown' },
+      async () => {
+        const auditorEvent = await this.auditor.createEvent({
+          eventId: 'doc-read',
+          ...(req && { request: req }),
+          meta: { uri: doc.uri },
+        });
+        try {
+          const text = await readFile(doc.path, 'utf8');
+          await auditorEvent.success();
+          return {
+            contents: [{ uri: doc.uri, mimeType: 'text/markdown', text }],
+          };
+        } catch (err) {
+          await auditorEvent.fail({ error: toError(err) });
+          // The file system error names the absolute path, which the client
+          // must not see.
+          throw new ResourceNotFoundError(doc.uri);
+        }
+      },
+    );
   }
 
   private filterActions(

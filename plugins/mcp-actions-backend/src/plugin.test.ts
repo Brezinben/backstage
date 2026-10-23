@@ -25,8 +25,10 @@ import {
   Client,
   StreamableHTTPClientTransport,
 } from '@modelcontextprotocol/client';
+import { resolve } from 'node:path';
 import request from 'supertest';
 import waitForExpect from 'wait-for-expect';
+import type { JsonObject } from '@backstage/types';
 
 describe('Mcp Backend', () => {
   const mockPluginWithActions = createBackendPlugin({
@@ -671,6 +673,68 @@ describe('Mcp Backend', () => {
       await request(server)
         .get('/.well-known/oauth-protected-resource/api/mcp-actions/v1')
         .expect(200);
+    });
+  });
+
+  describe('docs', () => {
+    const docsDirectory = resolve(__dirname, '__fixtures__/docs');
+
+    const listDocs = async (mcpActions: JsonObject, path: string) => {
+      const { server } = await startTestBackend({
+        features: [
+          mcpPlugin,
+          mockPluginWithActions,
+          metricsServiceMock.mock().factory,
+          tracingServiceMock.mock().factory,
+          mockServices.rootConfig.factory({
+            data: {
+              backend: { actions: { pluginSources: ['local'] } },
+              mcpActions,
+            },
+          }),
+        ],
+      });
+      const address = server.address();
+      if (typeof address !== 'object' || !('port' in address!)) {
+        throw new Error('server broke');
+      }
+      const client = new Client({ name: 'test client', version: '1.0' });
+      await client.connect(
+        new StreamableHTTPClientTransport(
+          new URL(`http://localhost:${address.port}/api/mcp-actions${path}`),
+        ),
+      );
+      if (!client.getServerCapabilities()?.resources) {
+        return [];
+      }
+      const { resources } = await client.listResources();
+      return resources.map(resource => resource.uri);
+    };
+
+    it('should serve the configured docs on the default server', async () => {
+      await expect(
+        listDocs({ docs: { directory: docsDirectory } }, '/v1'),
+      ).resolves.toEqual([
+        'docs://catalog/filters.md',
+        'docs://getting-started.md',
+      ]);
+    });
+
+    it('should serve docs only on the server that configures them', async () => {
+      const mcpActions = {
+        servers: {
+          catalog: {
+            name: 'Catalog Server',
+            docs: { directory: docsDirectory },
+          },
+        },
+      };
+
+      await expect(listDocs(mcpActions, '/v1/catalog')).resolves.toEqual([
+        'docs://catalog/filters.md',
+        'docs://getting-started.md',
+      ]);
+      await expect(listDocs(mcpActions, '/v1')).resolves.toEqual([]);
     });
   });
 });
